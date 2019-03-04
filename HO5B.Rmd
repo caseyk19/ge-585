@@ -1,0 +1,242 @@
+---
+title: "HO5B"
+author: "Casey Kelly"
+date: "March 1, 2019"
+output: html_document
+---
+
+```{r}
+library(rjags)
+library(coda)
+```
+
+```{r}
+### Part 1: simulate data from a known model
+n <- 100  			## define the sample size
+b0 <- 10				## define the intercept
+b1 <- 2					## define the slope
+beta <- matrix(c(b0,b1),2,1)		## put “true” regression parameters in a matrix
+sigma <- 4				## define the standard deviation
+x1 <- runif(n,0,20)
+x <- cbind(rep(1,n),x1)
+y <- rnorm(n,x%*%beta,sigma)
+plot(x1,y)
+abline(b0,b1,col=2,lwd=3)
+data <- list(x = x1, y = y, n = n)
+univariate_regression <- "
+model{
+
+  beta ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
+  prec ~ dgamma(s1,s2)    ## prior precision
+
+  for(i in 1:n){
+	  mu[i] <- beta[1] + beta[2]*x[i]   	## process model
+	  y[i]  ~ dnorm(mu[i],prec)		        ## data model
+  }
+}
+"
+## specify priors
+data$b0 <- as.vector(c(0,0))      ## regression beta means
+data$Vb <- solve(diag(10000,2))   ## regression beta precisions
+data$s1 <- 0.1                    ## error prior n/2
+data$s2 <- 0.1                    ## error prior SS/2
+## initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+  inits[[i]] <- list(beta = rnorm(2,0,5), prec = runif(1,1/100,1/20))
+}
+j.model   <- jags.model(file = textConnection(univariate_regression),
+                        data = data,
+                        inits = inits,
+                        n.chains = nchain)
+var.out   <- coda.samples (model = j.model,
+                           variable.names = c("beta","prec"),
+                           n.iter = 2000)
+
+```
+
+
+### Task 1
+* Evaluate the MCMC chain for convergence. Include relevant diagnostics and plots. Determine and remove burnin e.g. ```var.burn <- window(var.out,start=burnin)```
+* Report parameter summary table and plot marginal distributions
+```{r}
+
+plot(var.out) # check for convergence
+
+gelman.diag(var.out) #convergence test statistic
+
+GBR <- gelman.plot(var.out) #finding samples before convergenc to find "burn in"
+
+burnin = 500                               ## determine convergence
+var.burn <- window(var.out,start=burnin)  ## remove burn-in
+plot(var.burn)                             ## check diagnostics post burn-in
+gelman.plot(var.burn)
+
+acfplot(var.burn) #autocorrelation plot; looking for fast decay to zero fast indicator of independence
+effectiveSize(var.burn) 
+```
+
+
+* Describe and explain the parameter covariances that you observe in the pairs plot and parameter correlation matrix.
+```{r}
+var.mat <- as.matrix(var.burn)
+cor(var.mat)
+pairs(var.mat)
+```
+> In the parameter correlation matrix the diagnols represent variance between parameters and themselves which will always be 1.  The values off the diagnol are the covariance which represents how strongly parameters vary together.  The covariance between beta1 and beta2, the intercept and slope respectively, is large and negative.  This indicates that the beta1 and beta2 are inversely related.  As beta1 increases beta2 varies inversely such that it will decrease and visa versa. Beta1 and precision have a small, positive covariance value.  This indicates that these parameters do not vary strongly, but rather slightly in the same direction.  Alternatively, beta2 and precision have a small, but negative,covariance value.  These two parameters do not strongly vary together but vary slightly in opposing direction. 
+> These relationships can be observed in the pairs plot. The plot for beta1 and beta2 exhibit this strong, negative covariance.  The points in this plot are tightly grouped in a negative linear fashion.  The plots between the betas and precision appear to be white noise, demonstrating their weak covariation.  The plots with beta1 are slightly positive while the plots with beta2 are slightly negative. 
+
+
+
+
+
+* Compare the summary statistics for the Bayesian regression model to those from the classical regression:  summary(lm( y ~ x1 )).  This should include a comparison of the means and uncertainties of **all 3 model parameters**
+* Compare the fit parameters to the “true” parameters we used to generate the pseudo-data.  How well does the statistical analysis recover the true model?
+
+```{r}
+summary(var.burn)
+
+lm.sum<-summary(lm( y ~ x1 ))
+lm.sum
+1/(lm.sum$sigma^2) #mean precision 
+sqrt(lm.sum$sigma) #SD precision
+0.74741*(sqrt(length(x1))) #SD for beta0; SE*sqrt(samplesize)
+0.06827*(sqrt(length(x1))) #SD for beta1; SE*sqrt(samplesize)
+
+10-9.44273 #difference between true paramter beta 1 and MCMC fit paramter beta1 
+10-9.45276 #difference between true paramter beta 1 and lin reg fit paramter beta1 
+2-2.00350 #difference between true paramter beta 2 and MCMC fit paramter beta2
+2-2.00319 #difference between true paramter beta 2 and lin reg fit paramter beta2
+0.0625-0.07478 #difference between true paramter precision and MCMC fit paramter precision
+0.0625-0.07450024 ##difference between true paramter precision and lin reg fit paramter precision
+```
+> The means for the b0, b1, and precision parameters are very similar between models: 0.00098 difference between b0, 0.00045 for b1, and 0.00007 difference between precisions.  Comparing these fit parameters to the true paramters I observe that the mean values from the linear regression are closer to the true parameters than the MCMC by very small margins.  Based on these observations on the means I would conclude that the linear model recovers the true model better than the MCMC.
+
+>I transformed the SE output to SD for the linear regression so we can compare the uncertainties between models.  What I observed was that the uncertainties for the linear regression model are larger than the MCMC model.  B0 has a SD of .67235 in the MCMC and a SD of 7.4741 from the linear regression.  The Beta1 SD from the MCMC is .06241 and the SD from the linear regression is .6827.  Finally the precision SD from  the MCMC is 0.009705 and is 1.955634 for the precision form the linear regression. These smaller standard deviation reveal that the MCMC is able to recover the parameters of the model with greater certainty and less variation than the linear regression., the means of the MCMC parameters are closer to the "true" parameters than the linear regression.  Despite its slightly lesser ability at recovering the "true" parameters, as observed by comparing the means, the MCMC has magnitudes more certainty in recovering these parameters.
+
+
+
+
+###Task 2
+Extend your univariate regression model to a multivariate regression.
+Show the JAGS and R code used.
+```{r}
+### Simulate data from a known model
+n <- 250            ## define the sample size
+b0 <- 10                ## define the intercept
+b1 <- 2                 ## define slope1
+b2 <- -4        ## define slope2
+b3 <- 0.5       ## define interaction
+beta <- matrix(c(b0,b1,b2,b3),4,1)      ## put “true” regression parameters in a matrix
+sigma <- 4              ## define the standard deviation
+x1 <- runif(n,0,20)
+x2 <- runif(n,0,15)
+x3<- x1*x2
+x <- cbind(rep(1,n),x1,x2,x3)
+y <- rnorm(n,x%*%beta,sigma)
+plot(x1,y)
+abline(b0, b1, col=2,lwd=3)
+plot(x2, y)
+abline(b0,b2, col=2, lwd=3)
+data <- list(x1=x1, x2=x2, x3=x3, y = y, n = n)
+```
+
+```{r}
+##specify model
+
+multivariate_regression <- "
+model{
+
+  beta ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
+  prec ~ dgamma(s1,s2)    ## prior precision
+
+  for(i in 1:n){
+	  
+    mu[i] <- beta[1] + beta[2]*x1[i] + beta[3]*x2[i] + beta[4]*x3[i]  	## process model
+	  y[i]  ~ dnorm(mu[i],prec)		        ## data model
+  }
+}
+"
+```
+
+```{r}
+## specify priors
+data$b0 <- as.vector(c(0,0,0,0))      ## regression beta means
+data$Vb <- solve(diag(10000,4))   ## regression beta precisions
+data$s1 <- 0.1                    ## error prior n/2
+data$s2 <- 0.1                    ## error prior SS/2
+
+```
+
+```{r}
+## initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+  inits[[i]] <- list(beta = rnorm(4,0,5), prec = runif(1,1/100,1/20))
+}
+```
+
+```{r}
+j.model   <- jags.model(file = textConnection(multivariate_regression),
+                        data = data,
+                        inits = inits,
+                        n.chains = nchain)
+
+var.out   <- coda.samples (model = j.model,
+                           variable.names = c("beta","prec"),
+                           n.iter = 5000)
+```
+
+Include relevant convergence diagnostics and plots.
+```{r}
+plot(var.out) # check for convergence
+gelman.diag(var.out) #convergence test statistic
+GBR <- gelman.plot(var.out) #finding samples before convergenc to find "burn in"
+
+burnin = 1000                               ## determine convergence
+var.burn <- window(var.out,start=burnin)  ## remove burn-in
+plot(var.burn)    ## check diagnostics post burn-in
+gelman.plot(var.burn)
+
+acfplot(var.burn) #autocorrelation plot; looking for fast decay to zero fast indicator of independence
+effectiveSize(var.burn) 
+
+```
+
+Report parameter summary table.
+```{r}
+summary(var.burn)
+```
+
+Plot marginal and pairwise joint distributions. Indicate ‘true’ parameters on the plots
+```{r}
+var.mat <- as.matrix(var.burn)
+cor(var.mat)
+pairs(var.mat)
+
+par(mfrow=c(2,2))
+z= as.matrix(c(10,2,-4,0.5))
+for (j in 1:4){
+densplot(var.burn[,j], main=paste("beta",j), ylab="Density")
+abline(v=z[j], col=2, lwd=3)
+legend("topright",
+       "True Parameter",
+       lwd=3,
+        col="red",
+       cex=.5)
+}
+
+```
+
+
+Compare the fit parameters to the “true” parameters we used to generate the pseudo-data. How well does the statistical analysis recover the true model?
+
+```{r}
+abs(10-10.22510) #difference between fit and true intercept/b0
+abs(2-1.97594)  #difference between fit and true slope1/b1
+abs(-4 - -3.97492) #difference between fit and true slope2/b2
+abs(.5-0.49849) #difference between fit and true interaction term/b3
+```
+> Comparing the fit paramters to the true parameters used to generate the pseudo-data allows me to observe that the differences between them are extremely small, less than .2 difference.  Likewise, the standard deviation and time-series SE are also very small.  These descriptive statistics indicate that the variance of spread of the fit parameters is low.  The low variance in the statistical analysis is also observable in the precision parameter whose mean and standard deviation is also very small.  Given these observation one can conclude that the statistical analysis recovers the true model well.
