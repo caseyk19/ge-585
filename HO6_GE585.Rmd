@@ -1,0 +1,412 @@
+---
+title: "Exercise_06_StateSpace"
+author: "Casey Kelly"
+date: "March 5, 2019"
+output: html_document
+---
+Activity 6 - State-space models
+========================================================
+
+```{r}
+library(rjags)
+library(rnoaa)
+devtools::install_github("EcoForecast/ecoforecastR")
+```
+
+Full Model
+```{r}
+gflu = read.csv("http://www.google.org/flutrends/about/data/flu/us/data.txt",skip=11)
+time = as.Date(gflu$Date)
+y = gflu$Massachusetts
+plot(time,y,type='l',ylab="Flu Index",lwd=2,log='y')
+```
+
+```{r}
+RandomWalk = "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model
+  for(t in 2:n){
+    x[t]~dnorm(x[t-1],tau_add)
+  }
+  
+  #### Priors
+  x[1] ~ dnorm(x_ic,tau_ic)
+  tau_obs ~ dgamma(a_obs,r_obs)
+  tau_add ~ dgamma(a_add,r_add)
+}
+"
+```
+
+```{r}
+data <- list(y=log(y),n=length(y),x_ic=log(1000),tau_ic=100,a_obs=1,r_obs=1,a_add=1,r_add=1)
+```
+
+```{r}
+nchain = 3
+init <- list()
+for(i in 1:nchain){
+  y.samp = sample(y,length(y),replace=TRUE)
+  init[[i]] <- list(tau_add=1/var(diff(log(y.samp))),tau_obs=5/var(log(y.samp)))
+}
+```
+
+```{r}
+j.model   <- jags.model (file = textConnection(RandomWalk),
+                             data = data,
+                             inits = init,
+                             n.chains = 3)
+```
+
+```{r}
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                                n.iter = 10000)
+```
+
+```{r}
+time.rng = c(1,length(time)) ## adjust to zoom in and out
+out <- as.matrix(jags.out)
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975))
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col="lightBlue")
+points(time,y,pch="+",cex=0.5)
+```
+
+```{r}
+TA <-hist(1/sqrt(out[,1]),main=colnames(out)[1])
+TO<- hist(1/sqrt(out[,2]),main=colnames(out)[2])
+plot(out[,1],out[,2],pch=".",xlab=colnames(out)[1],ylab=colnames(out)[2])
+cor(out[,1:2])
+```
+
+
+
+Task #1:
+-----------
+
+Convert 3 out of every 4 observations to NA (i.e. treat the data as approximately monthly) and refit the model
+
+```{r}
+gflu = read.csv("http://www.google.org/flutrends/about/data/flu/us/data.txt",skip=11)
+time = as.Date(gflu$Date)
+b = gflu$Massachusetts
+j<- rep(NA,620)
+for (i in seq(0,620,4)){
+  j[i]<- b[i]
+}
+j #new matrix with data for every 4th month and NAs for every 1st, 2nd, and 3rd month
+
+```
+
+
+```{r}
+RandomWalk = "
+model{
+
+#### Data Model
+for(t in 1:n){
+j[t] ~ dnorm(x[t],tau_obs)
+}
+
+#### Process Model
+for(t in 2:n){
+x[t]~dnorm(x[t-1],tau_add)
+}
+
+#### Priors
+x[1] ~ dnorm(x_ic,tau_ic)
+tau_obs ~ dgamma(a_obs,r_obs)
+tau_add ~ dgamma(a_add,r_add)
+}
+"
+```
+
+
+```{r}
+data.j <- list(j=log(j),n=length(j),x_ic=log(1000),tau_ic=100,a_obs=1,r_obs=1,a_add=1,r_add=1)
+
+```
+
+
+```{r}
+nchain = 3
+init.j <- list()
+for(i in 1:nchain){
+  j.samp = sample(j,length(j),replace=TRUE)
+  init.j[[i]] <- list(tau_add=1/var(diff(log(j.samp))),tau_obs=5/var(log(j.samp)))
+}
+```
+
+
+```{r}
+j.model.j<- jags.model(file = textConnection(RandomWalk),
+                         data = data.j,
+                         inits = init.j,
+                         n.chains = 3)
+```
+
+
+
+
+```{r}
+jags.out.j<- coda.samples (model = j.model.j,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 10000)
+```
+
+
+```{r}
+time.rng = c(1,length(time)) 
+out.j <- as.matrix(jags.out.j)
+x.cols.j <- grep("^x",colnames(out.j)) 
+ci.j <- apply(exp(out.j[,x.cols.j]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+plot(time,ci.j[2,],type='n',ylim=range(j,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.j[1,],ci.j[3,],col="lightBlue") #with NAs
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col="red") #w/o NAs
+points(time,b,pch="O",cex=0.5) #w/o NAs
+points(time,ci.j[2,],pch="+",cex=0.75) #w/ NAs
+```
+
+> The CI for the second run, with 3/4 values being converted to NAs and then predicted, is larger than the CI for the observed data.  The CI for the predicted model is in blue while the observed model is in red.  From this visual assessment one can conclude that the predictive model has less confidence/greater uncertainty, but is still able to perform sucessfully in that this models output follows that of the observed data.
+
+
+```{r}
+b = gflu$Massachusetts
+y.obs<- matrix(data=b, ncol=4, nrow=155, byrow=TRUE) #reformat data so I can separate months 1-3 from the 4th months
+y.pred<- matrix(data=ci[2,], ncol=4, nrow=155, byrow=TRUE) #reformat data to separate months 1-3 from 4th months
+plot(y.obs[,1:3], y.pred[,1:3], ylim=range(y.pred,na.rm=TRUE), xlim=range(y.obs, na.rm=TRUE),
+     main ="Flu Index", ylab= "Observed", xlab="Predicted (median)", type='p')
+abline(0,1)
+
+```
+
+> This predicted (median) vs. observed plot demonstrates the predicted models accuracy.  The median predicted value for each observed value nearly follows a 1:1 line for the entire MCMC model results.  This demonstrates that this model was able to arrive at, or nearly at, the observed value despite the data omission.  This indicates accuracy in the model.  As the model performs iteractions of this prediction the differece between the predicted (median) and observed does grow but not extensively.  This ability to reproduce the same results indicates strong model precision.
+
+```{r}
+par(mfrow=c(1,1))
+hist(1/sqrt(out.j[,1]),main="Tau add with NAs")
+hist(1/sqrt(out.j[,2]),main="Tau obs with NAs")
+
+```
+
+```{r, fig.asp = 1.0}
+plot(out.j[,1],out.j[,2],pch=".", col="black", xlab="Tau add", ylab="Tau Obs", main="Parameters with NAs")
+cor(out.j[,1:2]) #with NAs
+```
+
+> How does the reduction in data volume affect the parameter estimates (taus)
+Tau add represents the process error and Tau obs represents the observation error. The reduction in data volume leads to a distribution whose frequencies are more concentrated than the full model.  There are less bins in these models compared to the full model despite the CI being larger.  This reduction in bin amount can be contributed to this reduction in data volume for the process error and observation errors.  Additionally the correlation matrix for the paramter estimates is smaller for the data volume reduced model compared to the full model.  This indicates that process errors in the volume reduced model have a weaker association with observation errors (and vice versa) than in the full model.
+
+Extra Credit (Part 1):
+----------------------
+
+Return to the original data and instead of removing 3/4 of the data remove the last 40 observations (convert to NA) and refit the model to make a forecast for this period
+```{r}
+gflu = read.csv("http://www.google.org/flutrends/about/data/flu/us/data.txt",skip=11)
+time = as.Date(gflu$Date)
+m = gflu$Massachusetts
+m[580:620]<- NA
+```
+
+```{r}
+RandomWalk = "
+model{
+
+#### Data Model
+for(t in 1:n){
+m[t] ~ dnorm(x[t],tau_obs)
+}
+
+#### Process Model
+for(t in 2:n){
+x[t]~dnorm(x[t-1],tau_add)
+}
+
+#### Priors
+x[1] ~ dnorm(x_ic,tau_ic)
+tau_obs ~ dgamma(a_obs,r_obs)
+tau_add ~ dgamma(a_add,r_add)
+}
+"
+
+```
+
+```{r}
+data.m <- list(m=log(m),n=length(m),x_ic=log(1000),tau_ic=100,a_obs=1,r_obs=1,a_add=1,r_add=1)
+
+nchain = 3
+init.m <- list()
+for(i in 1:nchain){
+  m.samp = sample(m,length(m),replace=TRUE)
+  init.m[[i]] <- list(tau_add=1/var(diff(log(m.samp))),tau_obs=5/var(log(m.samp)))
+}
+```
+
+```{r}
+j.model.m   <- jags.model (file = textConnection(RandomWalk),
+                        data = data.m,
+                        inits = init.m,
+                        n.chains = 3)
+
+jags.out.m   <- coda.samples (model = j.model.m,
+                            variable.names = c("x", "tau_add","tau_obs"),
+                            n.iter = 10000)
+```
+
+* Generate a time-series plot for the CI of x that includes the observations (as above but zoom the plot on the last ~80 observations). Use a different color and symbol to differentiate observations that were included in the model versus those that were converted to NA's.
+
+```{r}
+time.rng.m = c(580,620) ## adjust to zoom in and out
+out.m <- as.matrix(jags.out.m)
+x.cols.m <- grep("^x",colnames(out.m)) 
+ci.m <- apply(exp(out.m[,x.cols.m]),2,quantile,c(0.025,0.5,0.975))
+plot(time[580:620],ci.m[2,580:620],type='n',ylim=range(ci.m[2,580:620]),ylab="Flu Index",log='y', xlab="Time (Months)", xlim=time[time.rng.m])
+## adjust x-axis label to be monthly if zoomed
+# if(diff(time.rng.m) < 100){ 
+#   axis.Date(1, at=seq(time[time.rng.m[1]],time[time.rng.m[2]],by='month'), format = "%Y", labels=TRUE)
+# }
+ecoforecastR::ciEnvelope(time[580:620],ci.m[1,580:620],ci.m[3,580:620], col=rgb(0,0,1,1/4))
+ecoforecastR::ciEnvelope(time[580:620],ci[1,580:620],ci[3,580:620],col=rgb(1,0,0,1/4)) #w/o NAs
+points(time[580:620],y[580:620],pch="O",cex=0.5) #w/o NAs
+points(time[580:620],ci.m[2,580:620],pch="+",cex=0.75) #w/ NAs
+legend("topleft",
+       c("Observed Data", "Predicted Data", "95% CI on Observed", "95% CI on Predicted"),
+       pch=c("O", "+", "", ""),
+       fill=c(NULL, NULL,rgb(1,0,0,1/4), rgb(0,0,1,1/4)),
+       col="black",
+       cex=.75)
+```
+
+```{r}
+time.rng.n = c(500,620) ## adjust to zoom in and out
+plot(time[500:620],ci.m[2,500:620],type='n',ylim=range(ci.m[2,]),ylab="Flu Index",log='y', xlab="Time (Months)", xlim=time[time.rng.n])
+## adjust x-axis label to be monthly if zoomed
+ # if(diff(time.rng.m) < 100){ 
+ #   axis.Date(1, at=seq(time[time.rng.n[1]],time[time.rng.n[2]],by='month'), format = "%Y-%m")
+ # }
+#ecoforecastR::ciEnvelope(time,ci.m[1,],ci.m[3,], col=rgb(0,0,1,1/4))
+ecoforecastR::ciEnvelope(time[500:620],ci.m[1,500:620],ci.m[3,500:620], col=rgb(0,0,1,1/4))
+ecoforecastR::ciEnvelope(time[500:620],ci[1,500:620],ci[3,500:620],col=rgb(1,0,0,1/4)) #w/o NAs
+points(time[500:620],y[500:620],pch="O",cex=0.5) #w/o NAs
+points(time[500:620],ci.m[2,500:620],pch="+",cex=0.75) #w/ NAs
+legend("topleft",
+       c("Observed Data", "Predicted Data", "95% CI on Observed", "95% CI on Predicted"),
+       pch=c("O", "+", "", ""),
+       fill=c(NULL, NULL,rgb(1,0,0,1/4), rgb(0,0,1,1/4)),
+       col="black",
+       cex=.75)
+```
+
+
+```{r}
+hist(1/sqrt(out.m[,1]),main="Tau add with NAs")
+hist(1/sqrt(out.m[,2]),main="Tau obs with NAs")
+plot(out.m[,1],out.m[,2],pch=".", col="black", xlab="Tau add", ylab="Tau Obs", main="Parameters with NAs")
+cor(out.m[,1:2]) #with NAs
+
+```
+
+> The random walk performed well for the observation for which is had data.  The predictions followed the observations and the CI was the same.  However, when the model reached the time periods for which the data was NA the predictions failed and the CI expanded rapidly.  On the above graph one can see that the predictions essentially flatline (stay at the value of the last observation data point) and CI explodes.  Before the NA period the random walk was both accurate, was able to correctly predict the observed value, and precise, it was able to predict the same value repeatedly.  We could improve this model by adding additional lags and assuming non-statinarity.  This would enable the random walk to reach farther back than 1 previous time step, or the first difference. This would introduce more information, autocorrelation, to the model as it reached NA values. Since the mean and variance will be inconsistent overtime one would have to add paramter estimates for each additional lag. 
+
+
+# Dynamic Linear Models
+
+Assignment:
+-----------
+```{r}
+load("df.RData")
+df$date <- as.Date(paste(df$year,df$yday,sep = "-"),"%Y-%j")
+data$Tmin = df$tmin..deg.c.[match(time,df$date)]
+
+## fit the model
+ef.out <- ecoforecastR::fit_dlm(model=list(obs="y",fixed="~ Tmin"),data)
+
+## confidence interval
+out.ef <- as.matrix(ef.out$predict)
+ci.ef <- apply(exp(out.ef),2,quantile,c(0.025,0.5,0.975))
+params.ef <- as.matrix(window(ef.out$params,start=1000))
+```
+
+```{r}
+pred<-ci[2,]
+for (i in 1:620){
+  RSS<- sum((ci[2,i]-y[i])^2)
+}
+RSS # The residual sum of squares of my original random walk model.
+
+pred.ef<-ci.ef[2,]
+
+for (i in 1:620){
+  RSS.ef<- sum((ci.ef[2,i]-y[i])^2)
+}
+RSS.ef #residual sum of squares of my Dynamic Linear Model
+
+RSS-RSS.ef
+```
+
+> The RSS has been reduced by 417.043.
+
+
+```{r}
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col="lightBlue")
+ecoforecastR::ciEnvelope(time,ci.ef[1,],ci.ef[3,],col="red")
+points(time,ci[2,],pch="+",cex=0.5)
+points(time, ci.ef[2,], pch="O", cex=0.5)
+points(time, y, pch="#", cex=0.5)
+```
+
+```{r}
+plot(ci.ef[2,], y, ylim=range(y,na.rm=TRUE), xlim=range(ci.ef[2,], na.rm=TRUE),
+     main ="Flu Index", ylab= "Observed", xlab="Predicted (median) DLM", type='p')
+abline(0,1)
+plot(y.obs[,1:3], y.pred[,1:3], ylim=range(y.pred,na.rm=TRUE), xlim=range(y.obs, na.rm=TRUE),
+     main ="Flu Index", ylab= "Observed", xlab="Predicted (median)", type='p')
+abline(0,1)
+```
+
+> Visually assessing the above plot one can see that the CI for the dynamic linear fit and random walk model are nearly identical with the except of areas of directional change where the dynamic linear model performs better (smaller CI). Looking at plot comparing the observations and prediction one can also conclude that the DLM was more accurate and precise than the random walk due to its better fit along the 1:1 line.  Additionally, the Residual Sum of Squares for the dynamic linear model is much smaller than that for the original random walk model.  These assessments indicate that the dynamic linear model performed better, was more accurate and precise, that the original random walk model.
+
+```{r}
+hist(1/sqrt(out[,1]),main="Tau add Random Walk")
+hist(1/sqrt(out[,2]),main="Tau Obs Random Walk")
+hist(1/sqrt(params.ef[,4]),main="Tau add DLM")
+hist(1/sqrt(params.ef[,5]),main="Tau Obs DLM")
+```
+
+```{r}
+cor(out[,1:2])
+plot(out[,1],out[,2],pch=".",xlab=colnames(out)[1],ylab=colnames(out)[2], main="Random Walk")
+cor(params.ef)
+plot(params.ef[,4],params.ef[,5],pch=".",xlab=colnames(params.ef)[4],ylab=colnames(params.ef)[5], main="DLM")
+```
+
+> The Process (Tau Add) and Observation (Tau Obs) error estimates for the DLM are smaller than the Random Walk. Looking at histograms and pairs plots from each model I observe that the distributio range is smaller for both the process error and observation error in the DLM and their values are smaller.  By assessing the Tau Add and Tau Obs for the Random walk one can see that errors are concentrated.  This supports my earlier observation that the random walk accuracy and precision decreased at directional changes in the graph.  These many errors of consistent size show that the random walk is precise, but not as accurate as the DLM.
+
+>The betaTmin represents the slope of the covariate which is minimum daily temperature.  The mean value on betaTmin is -0.0019 which means that as flu observation increase/decrease by 1 the minimum daily temperature decreases/increases by this much on average.  This negative relationship is logical because flu occurence spikes in the winter months when temperatures get colder.
+The betaIntercept represents the slope of the current estimate for flu occurrence.  The mean value for betaIntercept is 0.31 which means that the predicted flu occurence with increase or decrease by 0.31 on average.  This slope capture the autocorrelation from our priors and utilizes it in predicting the next time step.
+The beta_IC represents the slope of the initial conditions effect.  This beta captures the influence that the prior on our initial condtions.  Since the intial conditions are pulled from a distribution they have a fixed effect on the process model.  The mean value of beta_IC is 0.95 which indicates that Initial Conditionals and flu occurence move almost exactly together. 
+Looking at the pair-wise plot and correlation statistic on the DLM one can see that betas are all strongly negatively correlated with one another.  A unit increase/decrease in one leads to a substantial almost unit decrease/increase in the others.  The betaIntercept and beta_IC have the strongest correlation, -0.99.  
+
+
+
+
